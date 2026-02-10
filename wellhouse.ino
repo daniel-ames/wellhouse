@@ -33,8 +33,52 @@ WebServer web_server(80);
 char httpStr[256] = {0};
 char systemStatusPageStr[SYS_STATUS_PAGE_STR_LEN];
 uint8_t wifi_disconnect_reason = 0;
+char current_time[41];
 
 float multiplier = 0.0625f;
+
+// Converts milliseconds into natural language
+void millisToDaysHoursMinutes(unsigned long milliseconds, char* str, int length)
+{
+  uint seconds = milliseconds / 1000;
+  memset(str, 0, length);
+
+  if (seconds <= 60) {
+    // It's only been a few seconds
+    // Longest string example, 11 chars: 59 seconds\0
+    snprintf(str, 11, "%d second%s", seconds, seconds == 1 ? "" : "s");
+    return;
+  }
+  uint minutes = seconds / 60;
+  if (minutes <= 60) {
+    // It's only been a few minutes
+    // Longest string example, 11 chars: 59 minutes\0
+    snprintf(str, 11, "%d minute%s", minutes, minutes == 1 ? "" : "s");
+    return;
+  }
+  uint hours = minutes / 60;
+  minutes -= hours * 60;
+  if (hours <= 24) {
+    // It's only been a few hours
+    if (minutes == 0)
+      // Longest string example, 9 chars: 23 hours\0
+      snprintf(str, 9, "%d hour%s", hours, hours == 1 ? "" : "s");
+    else
+      // Longest string example, 24 chars: 23 hours and 59 minutes\0
+      snprintf(str, 24, "%d hour%s and %d minute%s", hours, hours == 1 ? "" : "s", minutes, minutes == 1 ? "" : "s");
+    return;
+  }
+
+  // It's been more than a day
+  uint days = hours / 24;
+  hours -= days * 24;
+  if (minutes == 0)
+    // Longest string example, 23 chars: 9999 days and 23 hours\0
+    snprintf(str, 23, "%d day%s and %d hour%s", days, days == 1 ? "" : "s", hours, hours == 1 ? "" : "s");
+  else
+    // Longest string example, 35 chars: 9999 days, 23 hours and 59 minutes\0
+    snprintf(str, 35, "%d day%s, %d hour%s and %d minute%s", days, days == 1 ? "" : "s", hours, hours == 1 ? "" : "s", minutes, minutes == 1 ? "" : "s");
+}
 
 static const char* wifi_reason_str(uint8_t r) {
   switch (r) {
@@ -85,6 +129,10 @@ char* getSystemStatus()
 
   // Longest string example, 82 chars: Notifications are <span id='lights_span' style="color:Green;">ON</span>
   snprintf(httpStr, 60, "RSSI: %d, last disconnect reason: %s", WiFi.RSSI(), wifi_reason_str(wifi_disconnect_reason));
+  html += httpStr;
+  html += "</br>";
+  millisToDaysHoursMinutes(millis(), current_time, 40);
+  snprintf(httpStr, 60, "Uptime: %s", current_time);
   html += httpStr;
   html += "</span></br>";
   
