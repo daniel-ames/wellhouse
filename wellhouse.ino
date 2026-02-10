@@ -14,8 +14,8 @@
 #define MAX_WIFI_WAIT   10
 
 // the builtin led is active low for some dipshit reason
-#define ON  LOW
-#define OFF HIGH
+#define ON  HIGH
+#define OFF LOW
 
 #define ADS_SDA  21
 #define ADS_SCL  22
@@ -24,6 +24,24 @@
 const char* host = "optiplex";
 const uint16_t port = 27910;
 bool remote_control_inited = false;
+
+int16_t  a0_a1;
+float prev_mv = 0.0f;
+float mv = 0.0f;
+
+float current_rms = 0.0f;
+
+int prev_vector = 0;
+int vector = 0;
+
+int delta = 0;
+
+// WiFiClient client;
+char msg[MSG_SIZE_MAX];
+char tempFloat[FLOAT_SIZE_MAX];
+
+int led_timer = 0;
+bool led_on = false;
 
 Adafruit_ADS1115 ads;
 
@@ -128,11 +146,14 @@ char* getSystemStatus()
   html += "<span style=\"font-size:90px\">";
 
   // Longest string example, 82 chars: Notifications are <span id='lights_span' style="color:Green;">ON</span>
-  snprintf(httpStr, 60, "RSSI: %d, last disconnect reason: %s", WiFi.RSSI(), wifi_reason_str(wifi_disconnect_reason));
+  snprintf(httpStr, 100, "RSSI: %d, last disconnect reason: <span style=\"color:Green;\">%s</span>", WiFi.RSSI(), wifi_reason_str(wifi_disconnect_reason));
   html += httpStr;
   html += "</br>";
   millisToDaysHoursMinutes(millis(), current_time, 40);
   snprintf(httpStr, 60, "Uptime: %s", current_time);
+  html += httpStr;
+  html += "</br>";
+  snprintf(httpStr, 60, "rms: %f", current_rms);
   html += httpStr;
   html += "</span></br>";
   
@@ -275,26 +296,10 @@ void setup() {
   // The output of the SCT-013-000V (which I'm pretty sure is what i have) will be between 0V-1V.
   // 1V means 100A which we should never see, BUT, anything can happen sometimes. i don't wanna damage my ADC.
   // So go with GAIN_TWO. That should keep us safe.
-  // ads.setGain((adsGain_t)GAIN_TWO);
+  ads.setGain((adsGain_t)GAIN_TWO);
 }
 
-int16_t  a0_a1;
-float prev_mv = 0.0f;
-float mv = 0.0f;
 
-float current_rms = 0.0f;
-
-int prev_vector = 0;
-int vector = 0;
-
-int delta = 0;
-
-WiFiClient client;
-char msg[MSG_SIZE_MAX];
-char tempFloat[FLOAT_SIZE_MAX];
-
-int led_timer = 0;
-bool led_on = false;
 
 void loop() {
 
@@ -326,47 +331,47 @@ void loop() {
   delay(8);
 
   // Read current
-  // a0_a1 = ads.readADC_Differential_0_1();
+  a0_a1 = ads.readADC_Differential_0_1();
 
-  // if (a0_a1 != 0 && a0_a1 != -1) {
-  //   // Because you're going to come back in here years later and not know wth this is doing, here's a bone.
-  //   // Remember that a0_a1 is a reading of the differential voltage between A0 and A1 of the ADC.
-  //   // We set the gain at "GAIN_TWO", which means the adc is reading voltage between +2.048V and -2.048V,
-  //   // at 16 bits of resolution (65535 possible values). That's a full peak to peak range of (2.048 * 2 = 4.096).
-  //   // 4.096 / 65535 = .0625. So 16 bits can tell us a value between +-2.048v within .0625v of accuracy.
-  //   // To calculate the actual voltage value, you can think of it like divisions on an oscilliscope.
-  //   // Whatever it spits out, you have to multiply it by whatever each division represents.
-  //   // In our case, .0625. If you change the gain in the future, you gotta see what that full pk2pk range is,
-  //   // divide it by the resolution of the adc (16 bits [65535] for the ADS 1115), and use that as your 'multiplier'.
-  //   mv = a0_a1 * multiplier;
-  //   delta = mv - prev_mv;
-  //   vector = delta > 0 ? 1 : -1;
+  if (a0_a1 != 0 && a0_a1 != -1) {
+    // Because you're going to come back in here years later and not know wth this is doing, here's a bone.
+    // Remember that a0_a1 is a reading of the differential voltage between A0 and A1 of the ADC.
+    // We set the gain at "GAIN_TWO", which means the adc is reading voltage between +2.048V and -2.048V,
+    // at 16 bits of resolution (65535 possible values). That's a full peak to peak range of (2.048 * 2 = 4.096).
+    // 4.096 / 65535 = .0625. So 16 bits can tell us a value between +-2.048v within .0625v of accuracy.
+    // To calculate the actual voltage value, you can think of it like divisions on an oscilliscope.
+    // Whatever it spits out, you have to multiply it by whatever each division represents.
+    // In our case, .0625. If you change the gain in the future, you gotta see what that full pk2pk range is,
+    // divide it by the resolution of the adc (16 bits [65535] for the ADS 1115), and use that as your 'multiplier'.
+    mv = a0_a1 * multiplier;
+    delta = mv - prev_mv;
+    vector = delta > 0 ? 1 : -1;
 
-  //   // if (vector == -1 && prev_vector == 1) {
-  //   //   // Voltage is dropping from its positive peak.
-  //   //   // This means the last mv value is the peak.
-  //   //   // Calculate rms of the peak voltage. Keep it simple.
-  //   //   // prev_mv is in millivolts, so divide by 1000 to turn it back into whole Volts.
-  //   //   // Then x100 because the SCT-013-000V puts out 1V per 100A.
-  //   //   // Then x.707 to get rough rms.
-  //   //   current_rms = prev_mv / 1000 * 100 * 0.707f;
-  //   //   if (current_rms > 0 && WiFi.status() == WL_CONNECTED) {
-  //   //     if (client.connect(host, port)) {
-  //   //       memset(tempFloat, 0, FLOAT_SIZE_MAX);
-  //   //       memset(msg, 0, MSG_SIZE_MAX);
-  //   //       dtostrf(current_rms, 3, 2, tempFloat);
-  //   //       snprintf(msg, MSG_SIZE_MAX, "sp:%s", tempFloat);
-  //   //       if (client.connected()) { client.println(msg); }
-  //   //       //Serial.println(msg);
-  //   //       client.stop();
-  //   //     } else {
-  //   //       //Serial.println("connection failed");
-  //   //       delay(500);
-  //   //     }
-  //   //   }
-  //   //   led_timer = 20;
-  //   // }
-  //   prev_vector = vector;
-  //   prev_mv = mv;
-  // }
+    if (vector == -1 && prev_vector == 1) {
+      // Voltage is dropping from its positive peak.
+      // This means the last mv value is the peak.
+      // Calculate rms of the peak voltage. Keep it simple.
+      // prev_mv is in millivolts, so divide by 1000 to turn it back into whole Volts.
+      // Then x100 because the SCT-013-000V puts out 1V per 100A.
+      // Then x.707 to get rough rms.
+      current_rms = prev_mv / 1000 * 100 * 0.707f;
+      // if (current_rms > 0 && WiFi.status() == WL_CONNECTED) {
+      //   if (client.connect(host, port)) {
+      //     memset(tempFloat, 0, FLOAT_SIZE_MAX);
+      //     memset(msg, 0, MSG_SIZE_MAX);
+      //     dtostrf(current_rms, 3, 2, tempFloat);
+      //     snprintf(msg, MSG_SIZE_MAX, "sp:%s", tempFloat);
+      //     if (client.connected()) { client.println(msg); }
+      //     //Serial.println(msg);
+      //     client.stop();
+      //   } else {
+      //     //Serial.println("connection failed");
+      //     delay(500);
+      //   }
+      // }
+      led_timer = 20;
+    }
+    prev_vector = vector;
+    prev_mv = mv;
+  }
 }
