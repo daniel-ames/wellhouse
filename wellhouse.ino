@@ -14,7 +14,6 @@
 #define MAX_WIFI_WAIT   10
 #define RMS_WINDOW      250
 
-// the builtin led is active low for some dipshit reason
 #define ON  HIGH
 #define OFF LOW
 
@@ -25,21 +24,17 @@
 const char* host = "optiplex";
 const uint16_t port = 27910;
 bool remote_control_inited = false;
-float ct_amps_per_volt = 100.0f;
+
+// The CTs are supposedly 100a/v, but that's a big fat
+// load of cheap chinese hooey. These values are derived
+// from measuring against a real clamp meter.
+float ct_amps_per_volt_x = 151.7f;
+float ct_amps_per_volt_y = 154.4f;
+
+
 float arms_x = 0.0, arms_y = 0.0;
 
-int16_t  a0_a1;
-float prev_mv = 0.0f;
-float mv = 0.0f;
-
-int prev_vector = 0;
-int vector = 0;
-
-int delta = 0;
-
 // WiFiClient client;
-char msg[MSG_SIZE_MAX];
-char tempFloat[FLOAT_SIZE_MAX];
 
 int led_timer = 0;
 bool led_on = false;
@@ -312,9 +307,10 @@ void pump_current()
         vrms_y = (float)adc_ticks_y * adc_lsb;
 
   // The SCT-013-000 has "100A/1V" tattooed on it in a chinese accent.
-  // Assuming that's true...
-  arms_x = vrms_x * ct_amps_per_volt;
-  arms_y = vrms_y * ct_amps_per_volt;
+  // ct_amps_per_volt_* are adjusted values derived from real testing and compared
+  // to a real clamp meter.
+  arms_x = vrms_x * ct_amps_per_volt_x;
+  arms_y = vrms_y * ct_amps_per_volt_y;
 }
 
 
@@ -387,6 +383,13 @@ void setup() {
 void loop()
 {
   arms_x = 0.0, arms_y = 0.0;
+  
+  // Read current
+  pump_current();
+
+  if(arms_x > 0.05f || arms_y > 0.05f) {
+    Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
+  }
 
   if (WiFi.status() != WL_CONNECTED) {
     // wifi died. try to reconnect
@@ -413,10 +416,5 @@ void loop()
   //   }
   // }
 
-  // Read current
-  pump_current();
 
-  if(arms_x > 0 || arms_y > 0) {
-    Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
-  }
 }
