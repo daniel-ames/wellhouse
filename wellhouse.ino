@@ -12,6 +12,7 @@
 #define MSG_SIZE_MAX    16
 #define FLOAT_SIZE_MAX  8
 #define MAX_WIFI_WAIT   10
+#define RMS_WINDOW      250
 
 // the builtin led is active low for some dipshit reason
 #define ON  HIGH
@@ -24,12 +25,12 @@
 const char* host = "optiplex";
 const uint16_t port = 27910;
 bool remote_control_inited = false;
+float ct_amps_per_volt = 100.0f;
+float arms_x = 0.0, arms_y = 0.0;
 
 int16_t  a0_a1;
 float prev_mv = 0.0f;
 float mv = 0.0f;
-
-float current_rms = 0.0f;
 
 int prev_vector = 0;
 int vector = 0;
@@ -53,7 +54,7 @@ char systemStatusPageStr[SYS_STATUS_PAGE_STR_LEN];
 uint8_t wifi_disconnect_reason = 0;
 char current_time[41];
 
-float multiplier = 0.0625f;
+float adc_lsb = 0.0;  // least significant bit - in adc-speak, this is volts per tick. IOW, how much does the voltage change whenever just the LSB of the reading changes. (Thanks, Sprocket)
 
 // Converts milliseconds into natural language
 void millisToDaysHoursMinutes(unsigned long milliseconds, char* str, int length)
@@ -153,7 +154,7 @@ char* getSystemStatus()
   snprintf(httpStr, 60, "Uptime: %s", current_time);
   html += httpStr;
   html += "</br>";
-  snprintf(httpStr, 60, "rms: %f", current_rms);
+  snprintf(httpStr, 60, "x: %f, y: %f", arms_x, arms_y);
   html += httpStr;
   html += "</span></br>";
   
@@ -262,6 +263,87 @@ void wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
     wifi_disconnect_reason = info.wifi_sta_disconnected.reason;
 }
 
+
+// Read RMS amps of the pump
+void pump_current()
+{
+  uint32_t start_time = millis();
+
+  double sum_x = 0.0, sum_y = 0.0;
+  double sumsq_x = 0.0, sumsq_y = 0.0;
+  int16_t x, y;
+  uint32_t samples = 0;
+
+  while (millis() - start_time < RMS_WINDOW) {
+    x = ads.readADC_Differential_0_1();
+    y = ads.readADC_Differential_2_3();
+
+    sum_x += x;
+    sum_y += y;
+    sumsq_x += (double)x * (double)x;
+    sumsq_y += (double)y * (double)y;
+    samples++;
+  }
+
+  if (samples < 10) return;
+
+  // Sprocket came up with this math. She tried very hard to explain it to me,
+  // and I kind of get it. I get it enough to go ahead and use it.
+  // TODO: brush up on RMS theory.
+  // The mean is the DC component
+  double mean_x = sum_x / (double)samples,
+         mean_y = sum_y / (double)samples;
+  double ex2_x  = sumsq_x / (double)samples,
+         ex2_y  = sumsq_y / (double)samples;
+  // Remove the DC component
+  double var_x  = ex2_x - mean_x * mean_x,
+         var_y  = ex2_y - mean_y * mean_y;
+  
+  if (var_x < 0) var_x = 0;
+  if (var_y < 0) var_y = 0;
+
+  // Variance is a squared value. Remove the square
+  // to get back to real ticks.
+  double adc_ticks_x = sqrt(var_x),
+         adc_ticks_y = sqrt(var_y);
+
+  // Convert ADC ticks to actual voltage at ADS input
+  float vrms_x = (float)adc_ticks_x * adc_lsb,
+        vrms_y = (float)adc_ticks_y * adc_lsb;
+
+  // The SCT-013-000 has "100A/1V" tattooed on it in a chinese accent.
+  // Assuming that's true...
+  arms_x = vrms_x * ct_amps_per_volt;
+  arms_y = vrms_y * ct_amps_per_volt;
+}
+
+
+// Because you're going to come back in here years later and not know wth this is doing, here's a bone.
+// Remember that a0_a1 is a reading of the differential voltage between A0 and A1 of the ADC.
+// We set the gain at "GAIN_TWO", which means the adc is reading voltage between +2.048V and -2.048V,
+// at 16 bits of resolution (65535 possible values). That's a full peak to peak range of (2.048 * 2 = 4.096).
+// 4.096 / 65535 = 62.5uV. So 16 bits can tell us a value between +-2.048v within 62.5uv of accuracy.
+// To calculate the actual voltage value, you can think of it like divisions on an oscilliscope.
+// Whatever it spits out, you have to multiply it by whatever each division represents.
+// In our case, 62.5uv. If you change the gain in the future, this handy helper (Sprocket wrote it) will
+// map the gain to the LSB - Least Significant Bit. LSB is adc-speak for what I would call volts per division.
+float adcLsbVoltsForCurrentGain() {
+  adsGain_t g = ads.getGain();
+  float fs = 4.096f; // default for GAIN_ONE
+  switch (g) {
+    case GAIN_TWOTHIRDS: fs = 6.144f; break;
+    case GAIN_ONE:       fs = 4.096f; break;
+    case GAIN_TWO:       fs = 2.048f; break;
+    case GAIN_FOUR:      fs = 1.024f; break;
+    case GAIN_EIGHT:     fs = 0.512f; break;
+    case GAIN_SIXTEEN:   fs = 0.256f; break;
+    default:             fs = 4.096f; break;
+  }
+  return fs / 32768.0f;
+}
+
+/////////////////////////////////////
+
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, OFF);
@@ -297,11 +379,14 @@ void setup() {
   // 1V means 100A which we should never see, BUT, anything can happen sometimes. i don't wanna damage my ADC.
   // So go with GAIN_TWO. That should keep us safe.
   ads.setGain((adsGain_t)GAIN_TWO);
+  adc_lsb = adcLsbVoltsForCurrentGain();
 }
 
 
 
-void loop() {
+void loop()
+{
+  arms_x = 0.0, arms_y = 0.0;
 
   if (WiFi.status() != WL_CONNECTED) {
     // wifi died. try to reconnect
@@ -328,50 +413,10 @@ void loop() {
   //   }
   // }
 
-  delay(8);
-
   // Read current
-  a0_a1 = ads.readADC_Differential_0_1();
+  pump_current();
 
-  if (a0_a1 != 0 && a0_a1 != -1) {
-    // Because you're going to come back in here years later and not know wth this is doing, here's a bone.
-    // Remember that a0_a1 is a reading of the differential voltage between A0 and A1 of the ADC.
-    // We set the gain at "GAIN_TWO", which means the adc is reading voltage between +2.048V and -2.048V,
-    // at 16 bits of resolution (65535 possible values). That's a full peak to peak range of (2.048 * 2 = 4.096).
-    // 4.096 / 65535 = .0625. So 16 bits can tell us a value between +-2.048v within .0625v of accuracy.
-    // To calculate the actual voltage value, you can think of it like divisions on an oscilliscope.
-    // Whatever it spits out, you have to multiply it by whatever each division represents.
-    // In our case, .0625. If you change the gain in the future, you gotta see what that full pk2pk range is,
-    // divide it by the resolution of the adc (16 bits [65535] for the ADS 1115), and use that as your 'multiplier'.
-    mv = a0_a1 * multiplier;
-    delta = mv - prev_mv;
-    vector = delta > 0 ? 1 : -1;
-
-    if (vector == -1 && prev_vector == 1) {
-      // Voltage is dropping from its positive peak.
-      // This means the last mv value is the peak.
-      // Calculate rms of the peak voltage. Keep it simple.
-      // prev_mv is in millivolts, so divide by 1000 to turn it back into whole Volts.
-      // Then x100 because the SCT-013-000V puts out 1V per 100A.
-      // Then x.707 to get rough rms.
-      current_rms = prev_mv / 1000 * 100 * 0.707f;
-      // if (current_rms > 0 && WiFi.status() == WL_CONNECTED) {
-      //   if (client.connect(host, port)) {
-      //     memset(tempFloat, 0, FLOAT_SIZE_MAX);
-      //     memset(msg, 0, MSG_SIZE_MAX);
-      //     dtostrf(current_rms, 3, 2, tempFloat);
-      //     snprintf(msg, MSG_SIZE_MAX, "sp:%s", tempFloat);
-      //     if (client.connected()) { client.println(msg); }
-      //     //Serial.println(msg);
-      //     client.stop();
-      //   } else {
-      //     //Serial.println("connection failed");
-      //     delay(500);
-      //   }
-      // }
-      led_timer = 20;
-    }
-    prev_vector = vector;
-    prev_mv = mv;
+  if(arms_x > 0 || arms_y > 0) {
+    Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
   }
 }
