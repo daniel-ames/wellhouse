@@ -22,7 +22,7 @@
 
 
 const char* host = "optiplex";
-const uint16_t port = 27910;
+const uint16_t port = 27911;
 bool remote_control_inited = false;
 
 // The CTs are supposedly 100a/v, but that's a big fat
@@ -34,7 +34,9 @@ float ct_amps_per_volt_y = 154.4f;
 
 float arms_x = 0.0, arms_y = 0.0;
 
-// WiFiClient client;
+WiFiClient client;
+char msg[MSG_SIZE_MAX];
+char tempFloat[FLOAT_SIZE_MAX];
 
 int led_timer = 0;
 bool led_on = false;
@@ -388,7 +390,27 @@ void loop()
   pump_current();
 
   if(arms_x > 0.05f || arms_y > 0.05f) {
-    Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
+    // Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
+    if (client.connect(host, port)) {
+      Serial.printf("connected to: %s on port %d\n", host, port);
+      // send the reading
+      memset(tempFloat, 0, FLOAT_SIZE_MAX);
+      memset(msg, 0, MSG_SIZE_MAX);
+      dtostrf(arms_x, 3, 2, tempFloat);
+      snprintf(msg, MSG_SIZE_MAX, "wh:%s", tempFloat);
+      if (client.connected()) { client.println(msg); }
+      //Serial.println(msg);
+      client.stop();
+    } else Serial.printf("Failed to connect to: %s on port %d\n", host, port);
+    if (!led_on) {
+      digitalWrite(LED_BUILTIN, ON);
+      led_on = true;
+    }
+  } else {
+    if (led_on) {
+      digitalWrite(LED_BUILTIN, OFF);
+      led_on = false;
+    }
   }
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -402,19 +424,4 @@ void loop()
       init_remote_control();
     }
   }
-
-  // if (led_timer > 0) {
-  //   if (!led_on) {
-  //     digitalWrite(LED_BUILTIN, ON);
-  //     led_on = true;
-  //   }
-  //   led_timer--;
-  // } else {
-  //   if (led_on) {
-  //     digitalWrite(LED_BUILTIN, OFF);
-  //     led_on = false;
-  //   }
-  // }
-
-
 }
