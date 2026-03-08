@@ -22,7 +22,7 @@
 
 
 const char* host = "optiplex";
-const uint16_t port = 27911;
+const uint16_t port = 27910;
 bool remote_control_inited = false;
 
 // The CTs are supposedly 100a/v, but that's a big fat
@@ -164,8 +164,8 @@ char* getSystemStatus()
 }
 
 
-void init_remote_control() {
-  
+void init_remote_control()
+{
   if (remote_control_inited) return;
 
   web_server.on("/", HTTP_GET, []() {
@@ -238,7 +238,7 @@ bool connectToWifi()
   return false;
 }
 
-unsigned long reconnect_interval = 1000;
+unsigned long reconnect_interval = 10000;
 void reconnect_wifi()
 {
   static unsigned long prev_millis = 0;
@@ -255,7 +255,8 @@ void reconnect_wifi()
   }
 }
 
-void wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
+void wifi_event(WiFiEvent_t event, WiFiEventInfo_t info)
+{
   if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
     wifi_disconnect_reason = info.wifi_sta_disconnected.reason;
 }
@@ -397,7 +398,7 @@ void loop()
       memset(tempFloat, 0, FLOAT_SIZE_MAX);
       memset(msg, 0, MSG_SIZE_MAX);
       dtostrf(arms_x, 3, 2, tempFloat);
-      snprintf(msg, MSG_SIZE_MAX, "wh:%s", tempFloat);
+      snprintf(msg, MSG_SIZE_MAX, "dev=1 amps=%s\n", tempFloat);
       if (client.connected()) { client.println(msg); }
       //Serial.println(msg);
       client.stop();
