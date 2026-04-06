@@ -140,7 +140,7 @@ char* getSystemStatus()
 {
   String html;
   // Pardon the html mess. Gotta tell the browser to not make the text super tiny.
-  html = "<!DOCTYPE html><html><head><title>Driveway Lights</title></head><body><p style=\"font-size:36px\">";
+  html = "<!DOCTYPE html><html><head><title>Well House</title></head><body><p style=\"font-size:36px\">";
   html += "<span style=\"font-size:90px\">";
 
   // Longest string example, 82 chars: Notifications are <span id='lights_span' style="color:Green;">ON</span>
