@@ -9,7 +9,7 @@
 #include "html.h"
 #include "street_cred.h"
 
-#define MSG_SIZE_MAX    16
+#define MSG_SIZE_MAX    64
 #define FLOAT_SIZE_MAX  8
 #define MAX_WIFI_WAIT   10
 #define RMS_WINDOW      250
@@ -33,10 +33,11 @@ float ct_amps_per_volt_y = 154.4f;
 
 
 float arms_x = 0.0, arms_y = 0.0;
+char temp_x[FLOAT_SIZE_MAX];
+char temp_y[FLOAT_SIZE_MAX];
 
 WiFiClient client;
 char msg[MSG_SIZE_MAX];
-char tempFloat[FLOAT_SIZE_MAX];
 
 int led_timer = 0;
 bool led_on = false;
@@ -393,16 +394,18 @@ void loop()
   if(arms_x > 0.05f || arms_y > 0.05f) {
     // Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
     if (client.connect(host, port)) {
-      Serial.printf("connected to: %s on port %d\n", host, port);
+      //Serial.printf("connected to: %s on port %d\n", host, port);
       // send the reading
-      memset(tempFloat, 0, FLOAT_SIZE_MAX);
+      memset(temp_x, 0, FLOAT_SIZE_MAX);
+      memset(temp_y, 0, FLOAT_SIZE_MAX);
       memset(msg, 0, MSG_SIZE_MAX);
-      dtostrf(arms_x, 3, 2, tempFloat);
-      snprintf(msg, MSG_SIZE_MAX, "dev=1 amps=%s\n", tempFloat);
+      dtostrf(arms_x, 3, 2, temp_x);
+      dtostrf(arms_y, 3, 2, temp_y);
+      snprintf(msg, MSG_SIZE_MAX, "dev=2 ampsx=%s ampsy=%s\n", temp_x, temp_y);
       if (client.connected()) { client.println(msg); }
       //Serial.println(msg);
       client.stop();
-    } else Serial.printf("Failed to connect to: %s on port %d\n", host, port);
+    }// else Serial.printf("Failed to connect to: %s on port %d\n", host, port);
     if (!led_on) {
       digitalWrite(LED_BUILTIN, ON);
       led_on = true;
