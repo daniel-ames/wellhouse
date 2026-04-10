@@ -6,6 +6,7 @@
 #include <Wire.h>
 #include <WebServer.h>
 #include <Update.h>
+#include <time.h>
 #include "html.h"
 #include "street_cred.h"
 
@@ -50,9 +51,38 @@ WebServer web_server(80);
 char httpStr[256] = {0};
 char systemStatusPageStr[SYS_STATUS_PAGE_STR_LEN];
 uint8_t wifi_disconnect_reason = 0;
-char current_time[41];
+char uptime[41] = {0};
+char current_time[41] = {0};
+char boot_time[41] = {0};
+char last_sample_time[41] = {0};
 
 float adc_lsb = 0.0;  // least significant bit - in adc-speak, this is volts per tick. IOW, how much does the voltage change whenever just the LSB of the reading changes. (Thanks, Sprocket)
+
+static const char *ntp1 = "pool.ntp.org";
+static const char *ntp2 = "time.nist.gov";
+static const char *ntp3 = "time.google.com";
+
+void get_time(char *time_buf, int size)
+{
+  int time_retries = 40;  // try for about 10 seconds
+
+  memset(time_buf, 0, size);
+
+  time_t now = time(nullptr);
+  while (now < 8 * 3600 * 2 && time_retries) {   // basically "still 1970?"
+    delay(250);
+    now = time(nullptr);
+    time_retries--;
+  }
+
+  if (time_retries) {
+    struct tm tm_now;
+    localtime_r(&now, &tm_now);
+    strftime(time_buf, size, "%m-%d-%Y %I:%M:%S %p", &tm_now);
+  } else {
+    snprintf(time_buf, size, "unknown");
+  }
+}
 
 // Converts milliseconds into natural language
 void millisToDaysHoursMinutes(unsigned long milliseconds, char* str, int length)
@@ -144,12 +174,23 @@ char* getSystemStatus()
   html = "<!DOCTYPE html><html><head><title>Well House</title></head><body><p style=\"font-size:36px\">";
   html += "<span style=\"font-size:90px\">";
 
+  get_time(current_time, sizeof(current_time));
+
   // Longest string example, 82 chars: Notifications are <span id='lights_span' style="color:Green;">ON</span>
   snprintf(httpStr, 100, "RSSI: %d, last disconnect reason: <span style=\"color:Green;\">%s</span>", WiFi.RSSI(), wifi_reason_str(wifi_disconnect_reason));
   html += httpStr;
   html += "</br>";
-  millisToDaysHoursMinutes(millis(), current_time, 40);
-  snprintf(httpStr, 60, "Uptime: %s", current_time);
+  snprintf(httpStr, 60, "Boot Time: %s", boot_time);
+  html += httpStr;
+  html += "</br>";
+  snprintf(httpStr, 60, "Current Time: %s", current_time);
+  html += httpStr;
+  html += "</br>";
+  millisToDaysHoursMinutes(millis(), uptime, 40);
+  snprintf(httpStr, 60, "Uptime: %s", uptime);
+  html += httpStr;
+  html += "</br>";
+  snprintf(httpStr, 60, "Last sample: %s", last_sample_time);
   html += httpStr;
   html += "</br>";
   snprintf(httpStr, 60, "x: %f, y: %f", arms_x, arms_y);
@@ -365,6 +406,14 @@ void setup() {
   Wire.begin(ADS_SDA, ADS_SCL);
   ads.begin();
 
+  // setup the time parameters. Should only have to do this once
+  setenv("TZ", "CST6CDT,M3.2.0,M11.1.0", 1);
+  tzset();
+  configTime(0, 0, ntp1, ntp2, ntp3);
+
+  // Save off the boot time
+  get_time(boot_time, sizeof(boot_time));
+
   //                                                                ADS1015  ADS1115
   //                                                                -------  -------
   // ads.setGain(GAIN_TWOTHIRDS);  // 2/3x gain +/- 6.144V  1 bit = 3mV      0.1875mV (default)
@@ -383,13 +432,27 @@ void setup() {
 }
 
 
-
 void loop()
 {
   arms_x = 0.0, arms_y = 0.0;
   
   // Read current
   pump_current();
+
+  if (led_timer > 0) {
+    if (!led_on) {
+      digitalWrite(LED_BUILTIN, ON);
+      led_on = true;
+    }
+    // The timer will drain when the readings stop coming in
+    led_timer--;
+  } else {
+    if (led_on) {
+      digitalWrite(LED_BUILTIN, OFF);
+      led_on = false;
+      get_time(last_sample_time, sizeof(last_sample_time));
+    }
+  }
 
   if(arms_x > 0.05f || arms_y > 0.05f) {
     // Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
@@ -406,15 +469,7 @@ void loop()
       //Serial.println(msg);
       client.stop();
     }// else Serial.printf("Failed to connect to: %s on port %d\n", host, port);
-    if (!led_on) {
-      digitalWrite(LED_BUILTIN, ON);
-      led_on = true;
-    }
-  } else {
-    if (led_on) {
-      digitalWrite(LED_BUILTIN, OFF);
-      led_on = false;
-    }
+    led_timer = 20;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
