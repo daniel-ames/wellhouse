@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <time.h>
+#include <esp_system.h>
 #include "html.h"
 #include "street_cred.h"
 
@@ -55,6 +56,7 @@ char uptime[41] = {0};
 char current_time[41] = {0};
 char boot_time[41] = {0};
 char last_sample_time[41] = {0};
+uint32_t heap_max_alloc_boot = 0;
 
 float adc_lsb = 0.0;  // least significant bit - in adc-speak, this is volts per tick. IOW, how much does the voltage change whenever just the LSB of the reading changes. (Thanks, Sprocket)
 
@@ -178,23 +180,53 @@ char* getSystemStatus()
 
   // Longest string example, 82 chars: Notifications are <span id='lights_span' style="color:Green;">ON</span>
   snprintf(httpStr, 100, "RSSI: %d, last disconnect reason: <span style=\"color:Green;\">%s</span>", WiFi.RSSI(), wifi_reason_str(wifi_disconnect_reason));
-  html += httpStr;
-  html += "</br>";
+  html += httpStr; html += "</br>";
+
   snprintf(httpStr, 60, "Boot Time: %s", boot_time);
-  html += httpStr;
-  html += "</br>";
+  html += httpStr; html += "</br>";
+
   snprintf(httpStr, 60, "Current Time: %s", current_time);
-  html += httpStr;
-  html += "</br>";
+  html += httpStr; html += "</br>";
+
   millisToDaysHoursMinutes(millis(), uptime, 40);
   snprintf(httpStr, 60, "Uptime: %s", uptime);
-  html += httpStr;
-  html += "</br>";
+  html += httpStr; html += "</br>";
+
   snprintf(httpStr, 60, "Last sample: %s", last_sample_time);
-  html += httpStr;
-  html += "</br>";
+  html += httpStr; html += "</br>";
+
   snprintf(httpStr, 60, "x: %f, y: %f", arms_x, arms_y);
-  html += httpStr;
+  html += httpStr; html += "</br>";
+  
+  html += "</br>";
+  
+  uint32_t heap_total     = ESP.getHeapSize();
+  uint32_t heap_free      = ESP.getFreeHeap();
+  uint32_t heap_min_free  = ESP.getMinFreeHeap();
+  uint32_t heap_max_alloc = ESP.getMaxAllocHeap();
+
+  uint32_t heap_used = heap_total - heap_free;
+  float heap_used_pct = 0.0f;
+  if (heap_total != 0)
+    heap_used_pct = (100.0f * (float)heap_used) / (float)heap_total;
+
+  // Keep an eye on memory gremlins
+  snprintf(httpStr, 60, "=== Heap ===");
+  html += httpStr; html += "</br>";
+  snprintf(httpStr, 60, "Total: %lu", heap_total);
+  html += httpStr; html += "</br>";
+  snprintf(httpStr, 60, "Used : %lu (%.1f%%)", heap_used, heap_used_pct);
+  html += httpStr; html += "</br>";
+  snprintf(httpStr, 60, "Free : %lu", heap_free);
+  html += httpStr; html += "</br>";
+  snprintf(httpStr, 60, "Low water  : %lu", heap_min_free);
+  html += httpStr; html += "</br>";
+  snprintf(httpStr, 60, "Max alloc  : %lu", heap_max_alloc);
+  html += httpStr; html += "</br>";
+  snprintf(httpStr, 60, "Max alloc @ boot : %lu", heap_max_alloc_boot);
+  html += httpStr; html += "</br>";
+
+
   html += "</span></br>";
   
   // Close it off
@@ -429,13 +461,15 @@ void setup() {
   // So go with GAIN_TWO. That should keep us safe.
   ads.setGain((adsGain_t)GAIN_TWO);
   adc_lsb = adcLsbVoltsForCurrentGain();
+
+  heap_max_alloc_boot = ESP.getMaxAllocHeap();
 }
 
 
 void loop()
 {
   arms_x = 0.0, arms_y = 0.0;
-  
+
   // Read current
   pump_current();
 
