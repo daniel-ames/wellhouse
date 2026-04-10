@@ -174,7 +174,7 @@ char* getSystemStatus()
   String html;
   // Pardon the html mess. Gotta tell the browser to not make the text super tiny.
   html = "<!DOCTYPE html><html><head><title>Well House</title></head><body><p style=\"font-size:36px\">";
-  html += "<span style=\"font-size:90px\">";
+  html += "<span style=\"font-size:80px\">";
 
   get_time(current_time, sizeof(current_time));
 
@@ -439,9 +439,7 @@ void setup() {
   ads.begin();
 
   // setup the time parameters. Should only have to do this once
-  setenv("TZ", "CST6CDT,M3.2.0,M11.1.0", 1);
-  tzset();
-  configTime(0, 0, ntp1, ntp2, ntp3);
+  configTzTime("CST6CDT,M3.2.0,M11.1.0", ntp1, ntp2, ntp3);
 
   // Save off the boot time
   get_time(boot_time, sizeof(boot_time));
@@ -461,6 +459,8 @@ void setup() {
   // So go with GAIN_TWO. That should keep us safe.
   ads.setGain((adsGain_t)GAIN_TWO);
   adc_lsb = adcLsbVoltsForCurrentGain();
+
+  snprintf(last_sample_time, sizeof(last_sample_time), "None yet");
 
   heap_max_alloc_boot = ESP.getMaxAllocHeap();
 }
