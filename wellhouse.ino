@@ -34,7 +34,10 @@ float ct_amps_per_volt_x = 151.7f;
 float ct_amps_per_volt_y = 154.4f;
 
 
-float arms_x = 0.0, arms_y = 0.0;
+float arms_x = 0.0,
+      arms_y = 0.0,
+      arms_floor = 0.5;
+
 char temp_x[FLOAT_SIZE_MAX];
 char temp_y[FLOAT_SIZE_MAX];
 
@@ -488,10 +491,8 @@ void loop()
     }
   }
 
-  if(arms_x > 0.05f || arms_y > 0.05f) {
-    // Serial.printf("x: %f, y: %f\n", arms_x, arms_y);
+  if(arms_x > arms_floor || arms_y > arms_floor) {
     if (client.connect(host, port)) {
-      //Serial.printf("connected to: %s on port %d\n", host, port);
       // send the reading
       memset(temp_x, 0, FLOAT_SIZE_MAX);
       memset(temp_y, 0, FLOAT_SIZE_MAX);
@@ -500,9 +501,8 @@ void loop()
       dtostrf(arms_y, 3, 2, temp_y);
       snprintf(msg, MSG_SIZE_MAX, "dev=2 ampsx=%s ampsy=%s\n", temp_x, temp_y);
       if (client.connected()) { client.println(msg); }
-      //Serial.println(msg);
       client.stop();
-    }// else Serial.printf("Failed to connect to: %s on port %d\n", host, port);
+    }
     led_timer = 20;
   }
 
