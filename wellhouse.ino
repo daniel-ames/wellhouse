@@ -7,8 +7,11 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <time.h>
+#include <inttypes.h>
 #include <esp_system.h>
 #include "html.h"
+#include "esp_timer.h"
+#include "esp_sntp.h"
 #include "street_cred.h"
 
 #define MSG_SIZE_MAX    64
@@ -21,6 +24,15 @@
 
 #define ADS_SDA  21
 #define ADS_SCL  22
+
+// 1577836800 seconds since 1970 lands us at 2020.
+// Basically, a very generous number to check the local system time
+// to know if it hasn't been init'd. When ESP boots, it starts out thinking
+// Nixon is president, we just got back from the moon, and the dollar is
+// still backed by gold. So if time(nullptr) returns something less than
+// 1577836800, the ESP is probably wearing bell bottoms and thinks shag
+// carpet is groovy.
+#define EPOCH_2020  (1577836800LL)
 
 
 const char* host = "optiplex";
@@ -57,8 +69,9 @@ char systemStatusPageStr[SYS_STATUS_PAGE_STR_LEN];
 uint8_t wifi_disconnect_reason = 0;
 char uptime[41] = {0};
 char current_time[41] = {0};
-char boot_time[41] = {0};
+char boot_time[41] = "unknown\0";
 char last_sample_time[41] = {0};
+bool got_boot_time = false;
 uint32_t heap_max_alloc_boot = 0;
 
 float adc_lsb = 0.0;  // least significant bit - in adc-speak, this is volts per tick. IOW, how much does the voltage change whenever just the LSB of the reading changes. (Thanks, Sprocket)
@@ -67,69 +80,78 @@ static const char *ntp1 = "pool.ntp.org";
 static const char *ntp2 = "time.nist.gov";
 static const char *ntp3 = "time.google.com";
 
-void get_time(char *time_buf, int size)
+
+void set_boot_time()
 {
-  int time_retries = 40;  // try for about 10 seconds
+  struct timeval now;
+  gettimeofday(&now, nullptr);
 
-  memset(time_buf, 0, size);
+  int64_t now_us =
+      (int64_t)now.tv_sec * 1000000LL +
+      (int64_t)now.tv_usec;
 
+  int64_t boot_epoch_us = now_us - esp_timer_get_time();
+
+  time_t boot_epoch = (time_t)(boot_epoch_us / 1000000LL);
+
+  struct tm tm_boot_time;
+
+  if (localtime_r(&boot_epoch, &tm_boot_time) == nullptr) return;
+  if (strftime(boot_time, sizeof(boot_time), "%m-%d-%Y %I:%M:%S %p", &tm_boot_time) == 0) return;
+
+  got_boot_time = true;
+}
+
+bool get_time(char *time_buf, size_t size)
+{
   time_t now = time(nullptr);
-  while (now < 8 * 3600 * 2 && time_retries) {   // basically "still 1970?"
-    delay(250);
-    now = time(nullptr);
-    time_retries--;
+
+  if (now < EPOCH_2020) {
+    snprintf(time_buf, size, "unknown");
+    return false;
   }
 
-  if (time_retries) {
-    struct tm tm_now;
-    localtime_r(&now, &tm_now);
-    strftime(time_buf, size, "%m-%d-%Y %I:%M:%S %p", &tm_now);
-  } else {
-    snprintf(time_buf, size, "unknown");
-  }
+  struct tm tm_now;
+  localtime_r(&now, &tm_now);
+  strftime(time_buf, size, "%m-%d-%Y %I:%M:%S %p", &tm_now);
+  return true;
 }
 
 // Converts milliseconds into natural language
-void millisToDaysHoursMinutes(unsigned long milliseconds, char* str, int length)
+void millisToDaysHoursMinutes(uint64_t milliseconds, char* str, int length)
 {
-  uint seconds = milliseconds / 1000;
+  uint64_t seconds = milliseconds / 1000;
   memset(str, 0, length);
 
-  if (seconds <= 60) {
+  if (seconds < 60) {
     // It's only been a few seconds
-    // Longest string example, 11 chars: 59 seconds\0
-    snprintf(str, 11, "%d second%s", seconds, seconds == 1 ? "" : "s");
+    snprintf(str, length, "%" PRIu64 " second%s", seconds, seconds == 1 ? "" : "s");
     return;
   }
-  uint minutes = seconds / 60;
-  if (minutes <= 60) {
+  uint64_t minutes = seconds / 60;
+  if (minutes < 60) {
     // It's only been a few minutes
-    // Longest string example, 11 chars: 59 minutes\0
-    snprintf(str, 11, "%d minute%s", minutes, minutes == 1 ? "" : "s");
+    snprintf(str, length, "%" PRIu64 " minute%s", minutes, minutes == 1 ? "" : "s");
     return;
   }
-  uint hours = minutes / 60;
+  uint64_t hours = minutes / 60;
   minutes -= hours * 60;
-  if (hours <= 24) {
+  if (hours < 24) {
     // It's only been a few hours
     if (minutes == 0)
-      // Longest string example, 9 chars: 23 hours\0
-      snprintf(str, 9, "%d hour%s", hours, hours == 1 ? "" : "s");
+      snprintf(str, length, "%" PRIu64 " hour%s", hours, hours == 1 ? "" : "s");
     else
-      // Longest string example, 24 chars: 23 hours and 59 minutes\0
-      snprintf(str, 24, "%d hour%s and %d minute%s", hours, hours == 1 ? "" : "s", minutes, minutes == 1 ? "" : "s");
+      snprintf(str, length, "%" PRIu64 " hour%s and %" PRIu64 " minute%s", hours, hours == 1 ? "" : "s", minutes, minutes == 1 ? "" : "s");
     return;
   }
 
   // It's been more than a day
-  uint days = hours / 24;
+  uint64_t days = hours / 24;
   hours -= days * 24;
   if (minutes == 0)
-    // Longest string example, 23 chars: 9999 days and 23 hours\0
-    snprintf(str, 23, "%d day%s and %d hour%s", days, days == 1 ? "" : "s", hours, hours == 1 ? "" : "s");
+    snprintf(str, length, "%" PRIu64 " day%s and %" PRIu64 " hour%s", days, days == 1 ? "" : "s", hours, hours == 1 ? "" : "s");
   else
-    // Longest string example, 35 chars: 9999 days, 23 hours and 59 minutes\0
-    snprintf(str, 35, "%d day%s, %d hour%s and %d minute%s", days, days == 1 ? "" : "s", hours, hours == 1 ? "" : "s", minutes, minutes == 1 ? "" : "s");
+    snprintf(str, length, "%" PRIu64 " day%s, %" PRIu64 " hour%s and %" PRIu64 " minute%s", days, days == 1 ? "" : "s", hours, hours == 1 ? "" : "s", minutes, minutes == 1 ? "" : "s");
 }
 
 static const char* wifi_reason_str(uint8_t r) {
@@ -191,7 +213,7 @@ char* getSystemStatus()
   snprintf(httpStr, 60, "Current Time: %s", current_time);
   html += httpStr; html += "</br>";
 
-  millisToDaysHoursMinutes(millis(), uptime, 40);
+  millisToDaysHoursMinutes((uint64_t)esp_timer_get_time() / 1000uLL, uptime, sizeof(uptime));
   snprintf(httpStr, 60, "Uptime: %s", uptime);
   html += httpStr; html += "</br>";
 
@@ -235,8 +257,11 @@ char* getSystemStatus()
   // Close it off
   html += "</p></body></html>";
 
-  memset(systemStatusPageStr, 0, SYS_STATUS_PAGE_STR_LEN);
-  html.toCharArray(systemStatusPageStr, html.length() + 1);
+  if (html.length() + 1 > sizeof(systemStatusPageStr)) {
+    snprintf(systemStatusPageStr, sizeof(systemStatusPageStr), "Your html got bigger than the space you allocated for it, dummy!\n");
+  } else {
+    html.toCharArray(systemStatusPageStr, sizeof(systemStatusPageStr));
+  }
   return systemStatusPageStr;
 }
 
@@ -444,9 +469,6 @@ void setup() {
   // setup the time parameters. Should only have to do this once
   configTzTime("CST6CDT,M3.2.0,M11.1.0", ntp1, ntp2, ntp3);
 
-  // Save off the boot time
-  get_time(boot_time, sizeof(boot_time));
-
   //                                                                ADS1015  ADS1115
   //                                                                -------  -------
   // ads.setGain(GAIN_TWOTHIRDS);  // 2/3x gain +/- 6.144V  1 bit = 3mV      0.1875mV (default)
@@ -516,5 +538,8 @@ void loop()
     } else {
       init_remote_control();
     }
+  }
+  if (!got_boot_time && time(nullptr) >= EPOCH_2020) {
+    set_boot_time();
   }
 }
