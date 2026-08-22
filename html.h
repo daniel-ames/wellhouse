@@ -41,4 +41,16 @@ char* update_html =
 
 
 
-
+char* test_html =
+"<html>"
+"<head>"
+"  <title>Wellhouse Test</title>"
+"</head>"
+"<body>"
+"  <h2>Test Command</h2>"
+"  <form method='POST' action='/test'>"
+"    <input type='text' name='command' size='60' autofocus>"
+"    <input type='submit' value='Submit'>"
+"  </form>"
+"</body>"
+"</html>";

@@ -194,7 +194,7 @@ static const char* wifi_reason_str(uint8_t r) {
 
 
 
-char* getSystemStatus()
+char* get_system_status()
 {
   String html;
   // Pardon the html mess. Gotta tell the browser to not make the text super tiny.
@@ -265,6 +265,9 @@ char* getSystemStatus()
   return systemStatusPageStr;
 }
 
+#define TEST_COMMAND_MAX 64
+
+char test_command_buf[TEST_COMMAND_MAX] = {0};
 
 void init_remote_control()
 {
@@ -272,7 +275,7 @@ void init_remote_control()
 
   web_server.on("/", HTTP_GET, []() {
     web_server.sendHeader("Connection", "close");
-    web_server.send(200, "text/html", getSystemStatus());
+    web_server.send(200, "text/html", get_system_status());
   });
   // web_server.on("/toggle_mute", HTTP_POST, []() {
   //   char notificationsMuted = EEPROM.read(EEPROM_MUTE_NOTIFICATIONS_BYTE);
@@ -281,6 +284,45 @@ void init_remote_control()
   //   EEPROM.commit();
   //   web_server.send(200, "text/plain", notificationsMuted == 1 ? "Turn On" : "Turn Off");
   // });
+  web_server.on("/test", HTTP_GET, []() {
+    web_server.sendHeader("Connection", "close");
+    web_server.send(200, "text/html", test_html);
+  });
+
+  web_server.on("/test", HTTP_POST, []() {
+    if (!web_server.hasArg("command")) {
+      web_server.send(400, "text/plain", "Missing command");
+      return;
+    }
+
+    String command = web_server.arg("command");
+
+    if (command.length() >= sizeof(test_command_buf)) {
+      web_server.send(400, "text/plain", "Command too long");
+      return;
+    }
+
+    command.toCharArray(test_command_buf, sizeof(test_command_buf));
+    String response = "Stored test command: ";
+    response += test_command_buf;
+
+    web_server.sendHeader("Connection", "close");
+    web_server.send(200, "text/html", response);
+  });
+
+  web_server.on("/result", HTTP_GET, []() {
+    web_server.sendHeader("Cache-Control", "no-store");
+    web_server.sendHeader("Connection", "close");
+
+    if (test_command_buf[0] == '\0') {
+      web_server.send(200, "text/plain", "(no test command submitted)");
+    }
+    else {
+      web_server.send(200, "text/plain", test_command_buf);
+    }
+  });
+
+
   web_server.on("/update", HTTP_GET, []() {
     web_server.sendHeader("Connection", "close");
     web_server.send(200, "text/html", update_html);
