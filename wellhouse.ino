@@ -105,7 +105,7 @@ static bool test_handler()
 {
   if(!test_pattern.repeat) return false;
 
-  uint32_t time_cursor = (millis() / 1000) - time_start;
+  uint32_t time_cursor = (millis() - time_start) / 1000;
 
   for(int i = 0; i < test_pattern.number_of_phases; i++) {
     // Where does the current time cursor land in our pattern?
@@ -118,12 +118,12 @@ static bool test_handler()
   }
 
   // Done playing the pattern. Reset the time cursor and decrement repeat
-  time_start = millis() / 1000;
+  time_start = millis();
   test_pattern.repeat--;
   return true;
 }
 
-// 100:30,12,12;10,0,0
+// 100:30,12,12;10,0,0;28,11,10
 static bool stage_test(char *ptr)
 {
   // TODO: sanitize the input!
@@ -138,18 +138,24 @@ static bool stage_test(char *ptr)
   // parse the phases
   uint idx = 0;
   char *cursor = strtok(ptr, ";");
-  do {
-    // A phase looks like this --> 30,12,12;
-    test_pattern.phases[idx].duration = strtoul(cursor, NULL, 10);
-    while(*ptr++ != ',');
-    test_pattern.phases[idx].amps_x = strtof(cursor, NULL);
-    while(*ptr++ != ',');
-    test_pattern.phases[idx++].amps_y = strtof(cursor, NULL);
-  
-    test_pattern.number_of_phases++;
-  } while( (cursor = strtok(NULL, ";")) );
+  while (cursor) {
+    if (idx >= 32) return false;
 
-  time_start = millis() / 1000;
+    unsigned long duration;
+    float amps_x, amps_y;
+
+    if (sscanf(cursor, "%lu,%f,%f", &duration, &amps_x, &amps_y) != 3) return false;
+
+    test_pattern.phases[idx].duration = duration;
+    test_pattern.phases[idx].amps_x   = amps_x;
+    test_pattern.phases[idx].amps_y   = amps_y;
+
+    idx++;
+    cursor = strtok(NULL, ";");
+  }
+
+  test_pattern.number_of_phases = idx;
+  time_start = millis();
 
   return true;
 }
@@ -518,7 +524,10 @@ void wifi_event(WiFiEvent_t event, WiFiEventInfo_t info)
 // Read RMS amps of the pump
 void pump_current()
 {
-  if(test_handler()) return;
+  if(test_handler()){
+    delay(RMS_WINDOW); // To simulate the delay imposed by the sampling window
+    return;
+  }
 
   uint32_t start_time = millis();
 
