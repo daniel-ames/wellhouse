@@ -34,7 +34,6 @@
 // carpet is groovy.
 #define EPOCH_2020  (1577836800LL)
 
-
 const char* host = "optiplex";
 const uint16_t port = 27910;
 bool remote_control_inited = false;
@@ -79,6 +78,106 @@ float adc_lsb = 0.0;  // least significant bit - in adc-speak, this is volts per
 static const char *ntp1 = "pool.ntp.org";
 static const char *ntp2 = "time.nist.gov";
 static const char *ntp3 = "time.google.com";
+
+
+
+
+
+
+
+
+typedef struct {
+  float amps_x;
+  float amps_y;
+  uint32_t duration;
+} test_phase_t;
+
+typedef struct {
+  test_phase_t phases[32];
+  uint8_t number_of_phases;
+  uint32_t repeat;
+} test_pattern_t;
+
+test_pattern_t test_pattern;
+uint32_t time_start = 0;
+
+static bool test_handler()
+{
+  if(!test_pattern.repeat) return false;
+
+  uint32_t time_cursor = (millis() / 1000) - time_start;
+
+  for(int i = 0; i < test_pattern.number_of_phases; i++) {
+    // Where does the current time cursor land in our pattern?
+    if (time_cursor < test_pattern.phases[i].duration) {
+      arms_x = test_pattern.phases[i].amps_x;
+      arms_y = test_pattern.phases[i].amps_y;
+      return true;
+    }
+    time_cursor -= test_pattern.phases[i].duration;
+  }
+
+  // Done playing the pattern. Reset the time cursor and decrement repeat
+  time_start = millis() / 1000;
+  test_pattern.repeat--;
+  return true;
+}
+
+// 100:30,12,12;10,0,0
+static bool stage_test(char *ptr)
+{
+  // TODO: sanitize the input!
+  // if(input is stupid) return false;
+
+  test_pattern.number_of_phases = 0;
+  test_pattern.repeat = strtoul(ptr, NULL, 10);
+  
+  // walk to the first phase
+  while(*ptr++ != ':');
+
+  // parse the phases
+  uint idx = 0;
+  char *cursor = strtok(ptr, ";");
+  do {
+    // A phase looks like this --> 30,12,12;
+    test_pattern.phases[idx].duration = strtoul(cursor, NULL, 10);
+    while(*ptr++ != ',');
+    test_pattern.phases[idx].amps_x = strtof(cursor, NULL);
+    while(*ptr++ != ',');
+    test_pattern.phases[idx++].amps_y = strtof(cursor, NULL);
+  
+    test_pattern.number_of_phases++;
+  } while( (cursor = strtok(NULL, ";")) );
+
+  time_start = millis() / 1000;
+
+  return true;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 void set_boot_time()
@@ -303,8 +402,18 @@ void init_remote_control()
     }
 
     command.toCharArray(test_command_buf, sizeof(test_command_buf));
-    String response = "Stored test command: ";
+    
+    // Make a temp copy of the test command to pass into stage_test() because
+    // it uses strtok to parse the string, and strtok is destructive. I want to
+    // preserve the command.
+    char test_command_tmp[TEST_COMMAND_MAX] = {0};
+    memcpy(test_command_tmp, test_command_buf, TEST_COMMAND_MAX);
+    bool ret = stage_test(test_command_tmp);
+    
+    String response = "Stored test command: \"";
     response += test_command_buf;
+    if(ret) response += "\" accepted";
+    else    response += "\" failed";
 
     web_server.sendHeader("Connection", "close");
     web_server.send(200, "text/html", response);
@@ -409,6 +518,8 @@ void wifi_event(WiFiEvent_t event, WiFiEventInfo_t info)
 // Read RMS amps of the pump
 void pump_current()
 {
+  if(test_handler()) return;
+
   uint32_t start_time = millis();
 
   double sum_x = 0.0, sum_y = 0.0;
