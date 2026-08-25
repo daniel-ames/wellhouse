@@ -50,7 +50,8 @@ char* test_html =
 "  <h2>Test Command</h2>"
 "  <form method='POST' action='/test'>"
 "    <input type='text' name='command' size='60' autofocus>"
-"    <input type='submit' value='Submit'>"
+"    <button type='submit' name='action' value='run'>Submit</button>"
+"    <button type='submit' name='action' value='abort'>Abort</button>"
 "  </form>"
 "</body>"
 "</html>";
