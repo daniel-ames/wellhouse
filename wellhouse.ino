@@ -118,7 +118,8 @@ static bool sanitize_test_input(char *ptr)
       ptr[i] == ':' ||
       ptr[i] == ';' ||
       ptr[i] == ',' ||
-      ptr[i] == '.'
+      ptr[i] == '.' ||
+      ptr[i] == ' '
     ))
       return false;
   }
@@ -193,7 +194,7 @@ static bool stage_test(char *ptr)
     unsigned long duration;
     float amps_x, amps_y;
 
-    if (sscanf(cursor, "%lu,%f,%f", &duration, &amps_x, &amps_y) != 3) return false;
+    if (sscanf(cursor, " %lu , %f , %f", &duration, &amps_x, &amps_y) != 3) return false;
 
     staged.phases[idx].duration = duration;
     staged.phases[idx].amps_x   = amps_x;
