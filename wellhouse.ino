@@ -34,6 +34,23 @@
 #define EPOCH_2020  (1577836800LL)
 
 #define TEST_COMMAND_MAX 64
+#define MAX_PHASES  32
+
+typedef struct {
+  float amps_x;
+  float amps_y;
+  uint32_t duration;
+} test_phase_t;
+
+typedef struct {
+  test_phase_t phases[MAX_PHASES];
+  uint8_t number_of_phases;
+  uint32_t repeat;
+} test_pattern_t;
+
+test_pattern_t test_pattern;
+test_pattern_t staged;
+uint32_t time_start = 0;
 
 const char* host = "optiplex";
 const uint16_t port = 27910;
@@ -79,28 +96,6 @@ static const char *ntp1 = "pool.ntp.org";
 static const char *ntp2 = "time.nist.gov";
 static const char *ntp3 = "time.google.com";
 
-
-
-
-
-
-
-
-typedef struct {
-  float amps_x;
-  float amps_y;
-  uint32_t duration;
-} test_phase_t;
-
-typedef struct {
-  test_phase_t phases[32];
-  uint8_t number_of_phases;
-  uint32_t repeat;
-} test_pattern_t;
-
-test_pattern_t test_pattern;
-test_pattern_t staged;
-uint32_t time_start = 0;
 
 static bool sanitize_test_input(char *ptr)
 {
@@ -177,8 +172,10 @@ static bool stage_test(char *ptr)
   if (!colon) return false;
   if((uint32_t)(colon - ptr) > 4) return false; // Too many reps, bruh
 
-  while(*ptr != ':')
-    if(!isdigit(*ptr++)) return false;
+  while(*ptr != ':') {
+    if(!isdigit(*ptr) && *ptr != ' ') return false;
+    ptr++;
+  }
   ptr++;
 
   // The first token (repeat) is safe to parse
@@ -189,10 +186,15 @@ static bool stage_test(char *ptr)
   uint idx = 0;
   char *cursor = strtok(ptr, ";");
   while (cursor) {
-    if (idx >= 32) return false;
+    if (idx >= MAX_PHASES) return false;
 
     unsigned long duration;
     float amps_x, amps_y;
+    uint comma_count = 0;
+    original = cursor;
+    while(*original) if(*original++ == ',') comma_count++;
+
+    if (comma_count != 2) return false;
 
     if (sscanf(cursor, " %lu , %f , %f", &duration, &amps_x, &amps_y) != 3) return false;
 
@@ -214,31 +216,6 @@ static bool stage_test(char *ptr)
 
   return true;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 void set_boot_time()
