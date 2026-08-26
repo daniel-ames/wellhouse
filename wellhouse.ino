@@ -15,7 +15,6 @@
 #include "street_cred.h"
 
 #define MSG_SIZE_MAX    64
-#define FLOAT_SIZE_MAX  8
 #define MAX_WIFI_WAIT   10
 #define RMS_WINDOW      250
 
@@ -34,6 +33,24 @@
 // carpet is groovy.
 #define EPOCH_2020  (1577836800LL)
 
+#define TEST_COMMAND_MAX 64
+#define MAX_PHASES  32
+
+typedef struct {
+  float amps_x;
+  float amps_y;
+  uint32_t duration;
+} test_phase_t;
+
+typedef struct {
+  test_phase_t phases[MAX_PHASES];
+  uint8_t number_of_phases;
+  uint32_t repeat;
+} test_pattern_t;
+
+test_pattern_t test_pattern;
+test_pattern_t staged;
+uint32_t time_start = 0;
 
 const char* host = "optiplex";
 const uint16_t port = 27910;
@@ -49,9 +66,6 @@ float ct_amps_per_volt_y = 154.4f;
 float arms_x = 0.0,
       arms_y = 0.0,
       arms_floor = 0.5;
-
-char temp_x[FLOAT_SIZE_MAX];
-char temp_y[FLOAT_SIZE_MAX];
 
 WiFiClient client;
 char msg[MSG_SIZE_MAX];
@@ -73,12 +87,135 @@ char boot_time[41] = "unknown\0";
 char last_sample_time[41] = {0};
 bool got_boot_time = false;
 uint32_t heap_max_alloc_boot = 0;
+char test_command_buf[TEST_COMMAND_MAX] = {0};
+bool abort_test = false;
 
 float adc_lsb = 0.0;  // least significant bit - in adc-speak, this is volts per tick. IOW, how much does the voltage change whenever just the LSB of the reading changes. (Thanks, Sprocket)
 
 static const char *ntp1 = "pool.ntp.org";
 static const char *ntp2 = "time.nist.gov";
 static const char *ntp3 = "time.google.com";
+
+
+static bool sanitize_test_input(char *ptr)
+{
+  // Make sure we're not being fuzzed by a guy in a white van.
+  // They're always after me lucky charms.
+  uint32_t len = strnlen(ptr, TEST_COMMAND_MAX);
+
+  if (!len || len == TEST_COMMAND_MAX)
+    return false;
+
+  // The only valid characters in a command are 0-9:,.;
+  for (uint32_t i = 0; i < len; i++) {
+    if (!(
+      isdigit(ptr[i]) ||
+      ptr[i] == ':' ||
+      ptr[i] == ';' ||
+      ptr[i] == ',' ||
+      ptr[i] == '.' ||
+      ptr[i] == ' '
+    ))
+      return false;
+  }
+
+  // Prolly good enough for now. He said naively...
+  return true;
+}
+
+static bool test_handler()
+{
+  if (abort_test) {
+    abort_test = false;       // Consume the request
+    test_pattern.repeat = 0;  // Kill any active pattern
+    return false;
+  }
+
+  if(!test_pattern.repeat) return false;
+
+  uint32_t time_cursor = (millis() - time_start) / 1000;
+
+  for(int i = 0; i < test_pattern.number_of_phases; i++) {
+    // Where does the current time cursor land in our pattern?
+    if (time_cursor < test_pattern.phases[i].duration) {
+      arms_x = test_pattern.phases[i].amps_x;
+      arms_y = test_pattern.phases[i].amps_y;
+      return true;
+    }
+    time_cursor -= test_pattern.phases[i].duration;
+  }
+
+  // Done playing the pattern.Decrement repeat
+  test_pattern.repeat--;
+  if(!test_pattern.repeat) return false; // Out of repeats. We're done here.
+
+  // Reset the time cursor for the next repeat, and reset x and y to first
+  // phase values sooner than later.
+  time_start = millis();
+  arms_x = test_pattern.phases[0].amps_x;
+  arms_y = test_pattern.phases[0].amps_y;
+
+  return true;
+}
+
+// 100:30,12,12;10,0,0;28,11,10
+static bool stage_test(char *ptr)
+{
+  if(!sanitize_test_input(ptr)) return false;
+
+  char *original = ptr;
+
+  staged.number_of_phases = 0;
+  
+  // walk to the first phase
+  char *colon = strchr(ptr, ':');
+  if (!colon) return false;
+  if((uint32_t)(colon - ptr) > 4) return false; // Too many reps, bruh
+
+  while(*ptr != ':') {
+    if(!isdigit(*ptr) && *ptr != ' ') return false;
+    ptr++;
+  }
+  ptr++;
+
+  // The first token (repeat) is safe to parse
+  staged.repeat = strtoul(original, NULL, 10);
+  if(!staged.repeat) return false;
+
+  // parse the phases
+  uint idx = 0;
+  char *cursor = strtok(ptr, ";");
+  while (cursor) {
+    if (idx >= MAX_PHASES) return false;
+
+    unsigned long duration;
+    float amps_x, amps_y;
+    uint comma_count = 0;
+    original = cursor;
+    while(*original) if(*original++ == ',') comma_count++;
+
+    if (comma_count != 2) return false;
+
+    if (sscanf(cursor, " %lu , %f , %f", &duration, &amps_x, &amps_y) != 3) return false;
+
+    staged.phases[idx].duration = duration;
+    staged.phases[idx].amps_x   = amps_x;
+    staged.phases[idx].amps_y   = amps_y;
+
+    idx++;
+    cursor = strtok(NULL, ";");
+  }
+  if(!idx) return false;
+
+  staged.number_of_phases = idx;
+  // Everything looks good. Copy staged command to the live command.
+  test_pattern = staged;
+  abort_test = false;  // Shouldn't need this. Cheap insurance.
+
+  time_start = millis();
+
+  return true;
+}
 
 
 void set_boot_time()
@@ -194,7 +331,7 @@ static const char* wifi_reason_str(uint8_t r) {
 
 
 
-char* getSystemStatus()
+char* get_system_status()
 {
   String html;
   // Pardon the html mess. Gotta tell the browser to not make the text super tiny.
@@ -265,14 +402,13 @@ char* getSystemStatus()
   return systemStatusPageStr;
 }
 
-
 void init_remote_control()
 {
   if (remote_control_inited) return;
 
   web_server.on("/", HTTP_GET, []() {
     web_server.sendHeader("Connection", "close");
-    web_server.send(200, "text/html", getSystemStatus());
+    web_server.send(200, "text/html", get_system_status());
   });
   // web_server.on("/toggle_mute", HTTP_POST, []() {
   //   char notificationsMuted = EEPROM.read(EEPROM_MUTE_NOTIFICATIONS_BYTE);
@@ -281,6 +417,66 @@ void init_remote_control()
   //   EEPROM.commit();
   //   web_server.send(200, "text/plain", notificationsMuted == 1 ? "Turn On" : "Turn Off");
   // });
+  web_server.on("/test", HTTP_GET, []() {
+    web_server.sendHeader("Connection", "close");
+    web_server.send(200, "text/html", test_html);
+  });
+
+  web_server.on("/test", HTTP_POST, []() {
+    // Abort gets priority over everything else.
+    if (web_server.hasArg("action") &&
+        web_server.arg("action") == "abort") {
+
+      abort_test = true;
+
+      web_server.sendHeader("Connection", "close");
+      web_server.send(200, "text/plain", "Test abort requested");
+      return;
+    }
+
+    if (!web_server.hasArg("command")) {
+      web_server.send(400, "text/plain", "Missing command");
+      return;
+    }
+
+    String command = web_server.arg("command");
+
+    if (command.length() >= sizeof(test_command_buf)) {
+      web_server.send(400, "text/plain", "Command too long");
+      return;
+    }
+
+    command.toCharArray(test_command_buf, sizeof(test_command_buf));
+    
+    // Make a temp copy of the test command to pass into stage_test() because
+    // it uses strtok to parse the string, and strtok is destructive. I want to
+    // preserve the command.
+    char test_command_tmp[TEST_COMMAND_MAX] = {0};
+    memcpy(test_command_tmp, test_command_buf, TEST_COMMAND_MAX);
+    bool ret = stage_test(test_command_tmp);
+    
+    String response = "Stored test command: \"";
+    response += test_command_buf;
+    if(ret) response += "\" accepted";
+    else    response += "\" failed";
+
+    web_server.sendHeader("Connection", "close");
+    web_server.send(200, "text/html", response);
+  });
+
+  web_server.on("/result", HTTP_GET, []() {
+    web_server.sendHeader("Cache-Control", "no-store");
+    web_server.sendHeader("Connection", "close");
+
+    if (test_command_buf[0] == '\0') {
+      web_server.send(200, "text/plain", "(no test command submitted)");
+    }
+    else {
+      web_server.send(200, "text/plain", test_command_buf);
+    }
+  });
+
+
   web_server.on("/update", HTTP_GET, []() {
     web_server.sendHeader("Connection", "close");
     web_server.send(200, "text/html", update_html);
@@ -367,6 +563,11 @@ void wifi_event(WiFiEvent_t event, WiFiEventInfo_t info)
 // Read RMS amps of the pump
 void pump_current()
 {
+  if(test_handler()){
+    delay(RMS_WINDOW); // To simulate the delay imposed by the sampling window
+    return;
+  }
+
   uint32_t start_time = millis();
 
   double sum_x = 0.0, sum_y = 0.0;
@@ -516,12 +717,8 @@ void loop()
   if(arms_x > arms_floor || arms_y > arms_floor) {
     if (client.connect(host, port)) {
       // send the reading
-      memset(temp_x, 0, FLOAT_SIZE_MAX);
-      memset(temp_y, 0, FLOAT_SIZE_MAX);
       memset(msg, 0, MSG_SIZE_MAX);
-      dtostrf(arms_x, 3, 2, temp_x);
-      dtostrf(arms_y, 3, 2, temp_y);
-      snprintf(msg, MSG_SIZE_MAX, "dev=2 ampsx=%s ampsy=%s\n", temp_x, temp_y);
+      snprintf(msg, MSG_SIZE_MAX, "dev=2 ampsx=%.2f ampsy=%.2f\n", arms_x, arms_y);
       if (client.connected()) { client.println(msg); }
       client.stop();
     }
